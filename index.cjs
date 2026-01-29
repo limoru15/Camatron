@@ -1,6 +1,5 @@
 const { Client, GatewayIntentBits } = require("discord.js");
 const fs = require("fs");
-const http = require("http");
 
 // ==============================
 // TOKEN (VEM DO RENDER / AMBIENTE)
@@ -10,17 +9,6 @@ if (!TOKEN) {
   console.log("❌ DISCORD_TOKEN não definido.");
   process.exit(1);
 }
-
-// ==============================
-// HTTP (OBRIGATÓRIO NO RENDER WEB SERVICE FREE)
-// ==============================
-const PORT = process.env.PORT || 3000;
-http
-  .createServer((req, res) => {
-    res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("Camatron online");
-  })
-  .listen(PORT, () => console.log("🌐 HTTP ok na porta", PORT));
 
 // ==============================
 // CONFIGURAÇÕES
@@ -399,6 +387,7 @@ if (cmd === "!cassino") {
 });
 
 client.login(TOKEN);
+
 
 
 
