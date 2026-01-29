@@ -129,7 +129,7 @@ client.on("messageCreate", async (msg) => {
       "**ADM Camatron:**\n" +
       "`!addtokens @user X`\n" +
       "`!removetokens @user X`\n" +
-      "`!checktokens @user`"
+      "`!checktokens @user`" +
       "`!resetdaily @user`";
 
 
@@ -394,4 +394,5 @@ if (cmd === "!cassino") {
 });
 
 client.login(TOKEN);
+
 
