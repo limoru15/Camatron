@@ -129,7 +129,9 @@ client.on("messageCreate", async (msg) => {
       "**ADM Camatron:**\n" +
       "`!addtokens @user X`\n" +
       "`!removetokens @user X`\n" +
-      "`!checktokens @user`";
+      "`!checktokens @user`"
+      "`!resetdaily @user`";
+
 
     try {
       await msg.author.send(helpText);
@@ -191,6 +193,32 @@ client.on("messageCreate", async (msg) => {
     await sendAndAutoDelete(msg.channel, `💰 <@${targetId}> tem **${u.tokens} tokens**.`);
     return;
   }
+  
+// ==============================
+// RESET DAILY (ADM)
+if (cmd === "!resetdaily") {
+  if (canManageMessages(msg)) await safeDelete(msg);
+
+  if (!hasAdminRole(msg.member)) {
+    await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, só quem tem o cargo **ADM Camatron**.`);
+    return;
+  }
+
+  const targetId = args[0]?.replace(/[<@!>]/g, "");
+  if (!targetId) {
+    await sendAndAutoDelete(msg.channel, "Uso: `!resetdaily @user`");
+    return;
+  }
+
+  delete data.lastDaily[targetId];
+  saveData(data);
+
+  await sendAndAutoDelete(
+    msg.channel,
+    `🔄 Daily de <@${targetId}> resetado.`
+  );
+  return;
+}
 
   // ==============================
   // ADD / REMOVE TOKENS (ADM)
@@ -220,64 +248,78 @@ client.on("messageCreate", async (msg) => {
   }
 
   // ==============================
-  // CASSINO
-  // Uso: !cassino 5
-  if (cmd === "!cassino") {
-    if (canManageMessages(msg)) await safeDelete(msg);
+// CASSINO ESCALONADO
+// Uso: !cassino 5
+if (cmd === "!cassino") {
+  if (canManageMessages(msg)) await safeDelete(msg);
 
-    const bet = parseInt(args[0], 10);
-    if (!bet || bet < CASINO_MIN_BET) {
-      await sendAndAutoDelete(msg.channel, `🎰 ${msg.author}, uso: \`!cassino 5\` (mínimo ${CASINO_MIN_BET}).`);
-      return;
-    }
-
-    const user = getUser(data, msg.author.id);
-    if (user.tokens < bet) {
-      await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, tu não tem tokens suficientes.`);
-      return;
-    }
-
-    // cobra aposta
-    user.tokens -= bet;
-
-    // Probabilidades fixas (mín. 5):
-    // 0.1% jackpot 7 dias (10080)
-    // 1% 1 dia (1440)
-    // 2% x5
-    // 10% x2
-    // 15% devolve (x1)
-    // resto perde tudo
-    const r = Math.random();
-
-    let payout = 0;
-    let label = "💥 BUST! Perdeu tudo.";
-
-    if (r < 0.001) {                 // 0.1%
-      payout = 10080;
-      label = "🏆 JACKPOT! +10080 tokens (7 dias)!!";
-    } else if (r < 0.001 + 0.01) {   // +1%
-      payout = 1440;
-      label = "🌟 Raro! +1440 tokens (24h)!";
-    } else if (r < 0.001 + 0.01 + 0.02) { // +2%
-      payout = bet * 5;
-      label = `🔥 Win x5! +${payout} tokens.`;
-    } else if (r < 0.001 + 0.01 + 0.02 + 0.10) { // +10%
-      payout = bet * 2;
-      label = `✅ Win x2! +${payout} tokens.`;
-    } else if (r < 0.001 + 0.01 + 0.02 + 0.10 + 0.15) { // +15%
-      payout = bet;
-      label = `😮‍💨 Empate. Voltou ${payout} tokens.`;
-    }
-
-    user.tokens += payout;
-    saveData(data);
-
-    await sendAndAutoDelete(
-      msg.channel,
-      `🎰 ${msg.author} apostou **${bet}** tokens.\n${label}\n💰 Saldo agora: **${user.tokens}**`
-    );
+  const bet = parseInt(args[0], 10);
+  if (!bet || bet < 5) {
+    await sendAndAutoDelete(msg.channel, `🎰 ${msg.author}, aposta mínima é 5 tokens.`);
     return;
   }
+
+  const user = getUser(data, msg.author.id);
+  if (user.tokens < bet) {
+    await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, tokens insuficientes.`);
+    return;
+  }
+
+  user.tokens -= bet;
+
+  let chances;
+
+  if (bet < 20) {
+    chances = [
+      { p: 0.70, win: 0 },
+      { p: 0.20, win: 5 },
+      { p: 0.09, win: 10 },
+      { p: 0.01, win: 60 }
+    ];
+  } else if (bet < 100) {
+    chances = [
+      { p: 0.60, win: 0 },
+      { p: 0.20, win: 5 },
+      { p: 0.15, win: 10 },
+      { p: 0.04, win: 60 },
+      { p: 0.01, win: 1440 }
+    ];
+  } else {
+    chances = [
+      { p: 0.50, win: 0 },
+      { p: 0.20, win: 10 },
+      { p: 0.20, win: 60 },
+      { p: 0.09, win: 1440 },
+      { p: 0.01, win: 10080 }
+    ];
+  }
+
+  const r = Math.random();
+  let acc = 0;
+  let result = 0;
+
+  for (const c of chances) {
+    acc += c.p;
+    if (r <= acc) {
+      result = c.win;
+      break;
+    }
+  }
+
+  user.tokens += result;
+  saveData(data);
+
+  let msgResult =
+    result === 0
+      ? "💥 Perdeu tudo."
+      : `🎉 Ganhou **${result} tokens**!`;
+
+  await sendAndAutoDelete(
+    msg.channel,
+    `🎰 ${msg.author} apostou **${bet}** tokens.\n${msgResult}\n💰 Saldo: **${user.tokens}**`
+  );
+  return;
+}
 
   // ==============================
   // PUNIR (votação)
@@ -352,3 +394,4 @@ client.on("messageCreate", async (msg) => {
 });
 
 client.login(TOKEN);
+
