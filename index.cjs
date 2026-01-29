@@ -254,7 +254,7 @@ if (cmd === "!cassino") {
   if (canManageMessages(msg)) await safeDelete(msg);
 
   const bet = parseInt(args[0], 10);
-  if (!bet || bet < 5) {
+  if (!bet || bet < CASINO_MIN_BET) {
     await sendAndAutoDelete(msg.channel, `🎰 ${msg.author}, aposta mínima é 5 tokens.`);
     return;
   }
@@ -394,5 +394,6 @@ if (cmd === "!cassino") {
 });
 
 client.login(TOKEN);
+
 
 
