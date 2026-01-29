@@ -129,7 +129,7 @@ client.on("messageCreate", async (msg) => {
       "**ADM Camatron:**\n" +
       "`!addtokens @user X`\n" +
       "`!removetokens @user X`\n" +
-      "`!checktokens @user`" +
+      "`!checktokens @user'\n" +
       "`!resetdaily @user`";
 
 
@@ -248,52 +248,56 @@ if (cmd === "!resetdaily") {
   }
 
   // ==============================
-// CASSINO ESCALONADO
-// Uso: !cassino 5
+// CASSINO PROGRESSIVO (SEM CAP)
+// Uso: !cassino X
 if (cmd === "!cassino") {
   if (canManageMessages(msg)) await safeDelete(msg);
 
   const bet = parseInt(args[0], 10);
   if (!bet || bet < CASINO_MIN_BET) {
-    await sendAndAutoDelete(msg.channel, `🎰 ${msg.author}, aposta mínima é 5 tokens.`);
+    await sendAndAutoDelete(
+      msg.channel,
+      `🎰 ${msg.author}, aposta mínima é ${CASINO_MIN_BET} tokens.`
+    );
     return;
   }
 
   const user = getUser(data, msg.author.id);
   if (user.tokens < bet) {
-    await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, tokens insuficientes.`);
+    await sendAndAutoDelete(
+      msg.channel,
+      `❌ ${msg.author}, tokens insuficientes.`
+    );
     return;
   }
 
+  // desconta aposta
   user.tokens -= bet;
 
-  let chances;
+  // fator linear (do jeito que tu descreveu)
+  const factor = bet / 100;
 
-  if (bet < 20) {
-    chances = [
-      { p: 0.70, win: 0 },
-      { p: 0.20, win: 5 },
-      { p: 0.09, win: 10 },
-      { p: 0.01, win: 60 }
-    ];
-  } else if (bet < 100) {
-    chances = [
-      { p: 0.60, win: 0 },
-      { p: 0.20, win: 5 },
-      { p: 0.15, win: 10 },
-      { p: 0.04, win: 60 },
-      { p: 0.01, win: 1440 }
-    ];
-  } else {
-    chances = [
-      { p: 0.50, win: 0 },
-      { p: 0.20, win: 10 },
-      { p: 0.20, win: 60 },
-      { p: 0.09, win: 1440 },
-      { p: 0.01, win: 10080 }
-    ];
-  }
+  // probabilidades base + crescimento suave
+  let chances = [
+    { p: 0.70 - 0.002 * factor, win: 0 },
+    { p: 0.20 + 0.0005 * factor, win: 5 },
+    { p: 0.07 + 0.0008 * factor, win: 10 },
+    { p: 0.02 + 0.0005 * factor, win: 60 },
+    { p: 0.009 + 0.00015 * factor, win: 1440 },
+    { p: 0.001 + 0.00005 * factor, win: 10080 }
+  ];
 
+  // evita números negativos
+  chances = chances.map(c => ({
+    win: c.win,
+    p: Math.max(0, c.p)
+  }));
+
+  // normaliza (soma = 1)
+  const total = chances.reduce((s, c) => s + c.p, 0);
+  chances.forEach(c => (c.p /= total));
+
+  // sorteio
   const r = Math.random();
   let acc = 0;
   let result = 0;
@@ -306,20 +310,21 @@ if (cmd === "!cassino") {
     }
   }
 
+  // aplica ganho
   user.tokens += result;
   saveData(data);
 
-  let msgResult =
-    result === 0
-      ? "💥 Perdeu tudo."
-      : `🎉 Ganhou **${result} tokens**!`;
-
   await sendAndAutoDelete(
     msg.channel,
-    `🎰 ${msg.author} apostou **${bet}** tokens.\n${msgResult}\n💰 Saldo: **${user.tokens}**`
+    `🎰 ${msg.author} apostou **${bet}** tokens.\n` +
+      (result === 0
+        ? "💥 Perdeu tudo."
+        : `🎉 Ganhou **${result} tokens**!`) +
+      `\n💰 Saldo: **${user.tokens}**`
   );
   return;
 }
+
 
   // ==============================
   // PUNIR (votação)
@@ -394,6 +399,7 @@ if (cmd === "!cassino") {
 });
 
 client.login(TOKEN);
+
 
 
 
