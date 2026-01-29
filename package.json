@@ -1,10 +1,9 @@
 {
   "name": "camatron",
   "version": "1.0.0",
-  "main": "index.js",
-  "type": "module",
+  "main": "index.cjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.cjs"
   },
   "dependencies": {
     "discord.js": "^14.15.3"
