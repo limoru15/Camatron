@@ -1,14 +1,27 @@
 const { Client, GatewayIntentBits } = require("discord.js");
 const fs = require("fs");
+const http = require("http");
 
 // ==============================
-// COLE SEU TOKEN AQUI
+// TOKEN (VEM DO RENDER / AMBIENTE)
 // ==============================
 const TOKEN = process.env.DISCORD_TOKEN;
 if (!TOKEN) {
   console.log("❌ DISCORD_TOKEN não definido.");
   process.exit(1);
 }
+
+// ==============================
+// HTTP (OBRIGATÓRIO NO RENDER WEB SERVICE FREE)
+// ==============================
+const PORT = process.env.PORT || 3000;
+http
+  .createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("Camatron online");
+  })
+  .listen(PORT, () => console.log("🌐 HTTP ok na porta", PORT));
+
 // ==============================
 // CONFIGURAÇÕES
 // ==============================
@@ -16,8 +29,10 @@ const BOT_CHANNEL_ID = "1465997947064815739"; // canal do bot
 const ADMIN_ROLE_NAME = "ADM Camatron";       // cargo admin
 
 const VOTE_DURATION_MS = 5 * 60 * 1000;       // 5 minutos
-const MIN_VOTES = 5;                           // mínimo de votos (sim + não)
-const CLEANUP_DELAY_MS = 15 * 1000;           // apaga mensagens do bot depois de 15s
+const MIN_VOTES = 5;                          // mínimo de votos
+const CLEANUP_DELAY_MS = 15 * 1000;           // apaga msg do bot depois de 15s
+
+const CASINO_MIN_BET = 5;                     // aposta mínima
 
 // ==============================
 // CLIENTE
@@ -56,16 +71,22 @@ function hasAdminRole(member) {
   return member.roles.cache.some(r => r.name === ADMIN_ROLE_NAME);
 }
 function canManageMessages(msg) {
-  // se o bot não tiver permissão, não quebra o código
   return msg.guild?.members?.me?.permissions?.has("ManageMessages");
 }
 async function safeDelete(message) {
   try { await message.delete(); } catch (_) {}
 }
+
+// ✅ não derruba o bot se der erro de permissão
 async function sendAndAutoDelete(channel, content) {
-  const m = await channel.send(content);
-  setTimeout(() => safeDelete(m), CLEANUP_DELAY_MS);
-  return m;
+  try {
+    const m = await channel.send(content);
+    setTimeout(() => safeDelete(m), CLEANUP_DELAY_MS);
+    return m;
+  } catch (e) {
+    console.log("⚠️ Falha ao enviar mensagem:", e?.code || e);
+    return null;
+  }
 }
 
 // ==============================
@@ -88,8 +109,7 @@ client.on("messageCreate", async (msg) => {
   if (msg.author.bot) return;
   if (msg.channel.id !== BOT_CHANNEL_ID) return;
 
-  const raw = msg.content.trim();
-  const args = raw.split(/\s+/);
+  const args = msg.content.trim().split(/\s+/);
   const cmd = args.shift()?.toLowerCase();
   const data = loadData();
 
@@ -101,13 +121,15 @@ client.on("messageCreate", async (msg) => {
     const helpText =
       "**📜 Comandos do Camatron**\n\n" +
       "`!daily` → ganha 5 tokens\n" +
-      "`!tokens` → vê seus tokens\n" +
+      "`!tokens` → vê teus tokens\n" +
+      "`!cassino X` → aposta X tokens (mínimo 5)\n" +
       "`!punir @user <tempo>` → inicia votação\n" +
       "`!punir @user <tempo> anon` → votação anônima (custo dobrado)\n\n" +
       "**Tempos:** 1, 5, 10, 60, 1440, 10080\n\n" +
       "**ADM Camatron:**\n" +
       "`!addtokens @user X`\n" +
-      "`!removetokens @user X`";
+      "`!removetokens @user X`\n" +
+      "`!checktokens @user`";
 
     try {
       await msg.author.send(helpText);
@@ -119,7 +141,7 @@ client.on("messageCreate", async (msg) => {
   }
 
   // ==============================
-  // DAILY (apaga comando do usuário e apaga resposta depois)
+  // DAILY
   if (cmd === "!daily") {
     if (canManageMessages(msg)) await safeDelete(msg);
 
@@ -140,7 +162,7 @@ client.on("messageCreate", async (msg) => {
   }
 
   // ==============================
-  // TOKENS (apaga comando do usuário e apaga resposta depois)
+  // TOKENS (próprio)
   if (cmd === "!tokens") {
     if (canManageMessages(msg)) await safeDelete(msg);
 
@@ -150,7 +172,28 @@ client.on("messageCreate", async (msg) => {
   }
 
   // ==============================
-  // ADD / REMOVE TOKENS (ADM) — apaga comando e resposta some depois
+  // CHECKTOKENS (ADM vê tokens dos outros)
+  if (cmd === "!checktokens") {
+    if (canManageMessages(msg)) await safeDelete(msg);
+
+    if (!hasAdminRole(msg.member)) {
+      await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, só quem tem o cargo **ADM Camatron**.`);
+      return;
+    }
+
+    const targetId = args[0]?.replace(/[<@!>]/g, "");
+    if (!targetId) {
+      await sendAndAutoDelete(msg.channel, "Uso: `!checktokens @user`");
+      return;
+    }
+
+    const u = getUser(data, targetId);
+    await sendAndAutoDelete(msg.channel, `💰 <@${targetId}> tem **${u.tokens} tokens**.`);
+    return;
+  }
+
+  // ==============================
+  // ADD / REMOVE TOKENS (ADM)
   if (cmd === "!addtokens" || cmd === "!removetokens") {
     if (canManageMessages(msg)) await safeDelete(msg);
 
@@ -177,7 +220,67 @@ client.on("messageCreate", async (msg) => {
   }
 
   // ==============================
-  // PUNIR (apaga comando do usuário; votação some no final; reembolso se <5 votos)
+  // CASSINO
+  // Uso: !cassino 5
+  if (cmd === "!cassino") {
+    if (canManageMessages(msg)) await safeDelete(msg);
+
+    const bet = parseInt(args[0], 10);
+    if (!bet || bet < CASINO_MIN_BET) {
+      await sendAndAutoDelete(msg.channel, `🎰 ${msg.author}, uso: \`!cassino 5\` (mínimo ${CASINO_MIN_BET}).`);
+      return;
+    }
+
+    const user = getUser(data, msg.author.id);
+    if (user.tokens < bet) {
+      await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, tu não tem tokens suficientes.`);
+      return;
+    }
+
+    // cobra aposta
+    user.tokens -= bet;
+
+    // Probabilidades fixas (mín. 5):
+    // 0.1% jackpot 7 dias (10080)
+    // 1% 1 dia (1440)
+    // 2% x5
+    // 10% x2
+    // 15% devolve (x1)
+    // resto perde tudo
+    const r = Math.random();
+
+    let payout = 0;
+    let label = "💥 BUST! Perdeu tudo.";
+
+    if (r < 0.001) {                 // 0.1%
+      payout = 10080;
+      label = "🏆 JACKPOT! +10080 tokens (7 dias)!!";
+    } else if (r < 0.001 + 0.01) {   // +1%
+      payout = 1440;
+      label = "🌟 Raro! +1440 tokens (24h)!";
+    } else if (r < 0.001 + 0.01 + 0.02) { // +2%
+      payout = bet * 5;
+      label = `🔥 Win x5! +${payout} tokens.`;
+    } else if (r < 0.001 + 0.01 + 0.02 + 0.10) { // +10%
+      payout = bet * 2;
+      label = `✅ Win x2! +${payout} tokens.`;
+    } else if (r < 0.001 + 0.01 + 0.02 + 0.10 + 0.15) { // +15%
+      payout = bet;
+      label = `😮‍💨 Empate. Voltou ${payout} tokens.`;
+    }
+
+    user.tokens += payout;
+    saveData(data);
+
+    await sendAndAutoDelete(
+      msg.channel,
+      `🎰 ${msg.author} apostou **${bet}** tokens.\n${label}\n💰 Saldo agora: **${user.tokens}**`
+    );
+    return;
+  }
+
+  // ==============================
+  // PUNIR (votação)
   if (cmd === "!punir") {
     if (canManageMessages(msg)) await safeDelete(msg);
 
@@ -198,7 +301,6 @@ client.on("messageCreate", async (msg) => {
       return;
     }
 
-    // cobra tokens
     opener.tokens -= cost;
     saveData(data);
 
@@ -220,11 +322,9 @@ client.on("messageCreate", async (msg) => {
       const no  = (fetched.reactions.cache.get("👎")?.count || 1) - 1;
       const total = yes + no;
 
-      // sem votos suficientes: reembolsa
       if (total < MIN_VOTES) {
         const d2 = loadData();
-        const opener2 = getUser(d2, msg.author.id);
-        opener2.tokens += cost;
+        getUser(d2, msg.author.id).tokens += cost;
         saveData(d2);
 
         await sendAndAutoDelete(msg.channel, `❌ Votação inválida (<${MIN_VOTES} votos). Tokens devolvidos para ${msg.author}.`);
@@ -232,7 +332,6 @@ client.on("messageCreate", async (msg) => {
         return;
       }
 
-      // com votos suficientes: decide
       if (yes > no) {
         try {
           const member = await msg.guild.members.fetch(targetId);
@@ -245,7 +344,6 @@ client.on("messageCreate", async (msg) => {
         await sendAndAutoDelete(msg.channel, `❌ Rejeitado. <@${targetId}> não levou castigo.`);
       }
 
-      // limpa mensagem da votação
       setTimeout(() => safeDelete(fetched), CLEANUP_DELAY_MS);
     }, VOTE_DURATION_MS);
 
