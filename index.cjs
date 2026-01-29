@@ -131,25 +131,34 @@ client.on("messageCreate", async (msg) => {
   }
 
   // ==============================
-  // DAILY
-  if (cmd === "!daily") {
-    if (canManageMessages(msg)) await safeDelete(msg);
+// DAILY (reseta na virada do dia)
+if (cmd === "!daily") {
+  if (canManageMessages(msg)) await safeDelete(msg);
 
-    const last = data.lastDaily[msg.author.id] || 0;
-    const now = Date.now();
-    if (now - last < 86400000) {
-      await sendAndAutoDelete(msg.channel, `⏳ ${msg.author}, tu já pegou os tokens hoje.`);
-      return;
-    }
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10); // YYYY-MM-DD
 
-    const user = getUser(data, msg.author.id);
-    user.tokens += 5;
-    data.lastDaily[msg.author.id] = now;
-    saveData(data);
+  const lastDay = data.lastDaily[msg.author.id];
 
-    await sendAndAutoDelete(msg.channel, `🎉 ${msg.author}, +5 tokens!`);
+  if (lastDay === today) {
+    await sendAndAutoDelete(
+      msg.channel,
+      `⏳ ${msg.author}, tu já pegou os tokens hoje.`
+    );
     return;
   }
+
+  const user = getUser(data, msg.author.id);
+  user.tokens += 5;
+  data.lastDaily[msg.author.id] = today;
+  saveData(data);
+
+  await sendAndAutoDelete(
+    msg.channel,
+    `🎉 ${msg.author}, +5 tokens!`
+  );
+  return;
+}
 
   // ==============================
   // TOKENS (próprio)
@@ -387,6 +396,7 @@ if (cmd === "!cassino") {
 });
 
 client.login(TOKEN);
+
 
 
 
