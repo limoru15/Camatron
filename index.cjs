@@ -245,7 +245,7 @@ if (cmd === "!resetdaily") {
   }
 
   // ==============================
-// CASSINO PROGRESSIVO (SEM CAP)
+// CASSINO PROGRESSIVO (1% / 0.1%)
 // Uso: !cassino X
 if (cmd === "!cassino") {
   if (canManageMessages(msg)) await safeDelete(msg);
@@ -268,23 +268,20 @@ if (cmd === "!cassino") {
     return;
   }
 
-  // desconta aposta
   user.tokens -= bet;
 
-  // fator linear (do jeito que tu descreveu)
   const factor = bet / 100;
 
-  // probabilidades base + crescimento suave
   let chances = [
-    { p: 0.70 - 0.002 * factor, win: 0 },
-    { p: 0.20 + 0.0005 * factor, win: 5 },
-    { p: 0.07 + 0.0008 * factor, win: 10 },
-    { p: 0.02 + 0.0005 * factor, win: 60 },
-    { p: 0.009 + 0.00015 * factor, win: 1440 },
-    { p: 0.001 + 0.00005 * factor, win: 10080 }
+    { p: 0.50 - 0.01 * factor, win: 0 },
+    { p: 0.289 + 0.004 * factor, win: 5 },
+    { p: 0.15 + 0.003 * factor, win: 10 },
+    { p: 0.05 + 0.002 * factor, win: 60 },
+    { p: 0.01 + 0.0006 * factor, win: 1440 },
+    { p: 0.001 + 0.0002 * factor, win: 10080 }
   ];
 
-  // evita números negativos
+  // garante que nada fique negativo
   chances = chances.map(c => ({
     win: c.win,
     p: Math.max(0, c.p)
@@ -306,6 +303,20 @@ if (cmd === "!cassino") {
       break;
     }
   }
+
+  user.tokens += result;
+  saveData(data);
+
+  await sendAndAutoDelete(
+    msg.channel,
+    `🎰 ${msg.author} apostou **${bet}** tokens.\n` +
+      (result === 0
+        ? "💥 Perdeu tudo."
+        : `🎉 Ganhou **${result} tokens**!`) +
+      `\n💰 Saldo: **${user.tokens}**`
+  );
+  return;
+}
 
   // aplica ganho
   user.tokens += result;
@@ -396,6 +407,7 @@ if (cmd === "!cassino") {
 });
 
 client.login(TOKEN);
+
 
 
 
