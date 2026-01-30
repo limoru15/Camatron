@@ -1,8 +1,8 @@
-const { Client, GatewayIntentBits } = require("discord.js");
+const { Client, GatewayIntentBits, PermissionsBitField } = require("discord.js");
 const fs = require("fs");
 
 // ==============================
-// TOKEN (VEM DO RENDER / AMBIENTE)
+// TOKEN (VEM DO HOST / AMBIENTE)
 // ==============================
 const TOKEN = process.env.DISCORD_TOKEN;
 if (!TOKEN) {
@@ -15,12 +15,8 @@ if (!TOKEN) {
 // ==============================
 const BOT_CHANNEL_ID = "1465997947064815739"; // canal do bot
 const ADMIN_ROLE_NAME = "ADM Camatron";       // cargo admin
-
-const VOTE_DURATION_MS = 5 * 60 * 1000;       // 5 minutos
 const MIN_VOTES = 5;                          // mínimo de votos
 const CLEANUP_DELAY_MS = 15 * 1000;           // apaga msg do bot depois de 15s
-
-const CASINO_MIN_BET = 5;                     // aposta mínima
 
 // ==============================
 // CLIENTE
@@ -48,24 +44,28 @@ function loadData() {
   }
   return JSON.parse(fs.readFileSync(DATA_FILE));
 }
+
 function saveData(data) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
+
 function getUser(data, id) {
   if (!data.users[id]) data.users[id] = { tokens: 0 };
   return data.users[id];
 }
+
 function hasAdminRole(member) {
-  return member.roles.cache.some(r => r.name === ADMIN_ROLE_NAME);
+  return member?.roles?.cache?.some(r => r.name === ADMIN_ROLE_NAME);
 }
+
 function canManageMessages(msg) {
-  return msg.guild?.members?.me?.permissions?.has("ManageMessages");
+  return msg.guild?.members?.me?.permissions?.has(PermissionsBitField.Flags.ManageMessages);
 }
+
 async function safeDelete(message) {
   try { await message.delete(); } catch (_) {}
 }
 
-// ✅ não derruba o bot se der erro de permissão
 async function sendAndAutoDelete(channel, content) {
   try {
     const m = await channel.send(content);
@@ -75,6 +75,15 @@ async function sendAndAutoDelete(channel, content) {
     console.log("⚠️ Falha ao enviar mensagem:", e?.code || e);
     return null;
   }
+}
+
+// ==============================
+// DAILY POR VIRADA DO DIA (SÃO PAULO)
+// ==============================
+function todayKeySaoPaulo() {
+  const now = new Date();
+  const br = new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  return br.toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
 // ==============================
@@ -93,33 +102,36 @@ client.once("ready", () => {
   console.log(`✅ Camatron online como ${client.user.tag}`);
 });
 
+process.on("unhandledRejection", (err) => console.log("⚠️ unhandledRejection:", err));
+client.on("error", (err) => console.log("⚠️ client error:", err));
+
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot) return;
   if (msg.channel.id !== BOT_CHANNEL_ID) return;
 
   const args = msg.content.trim().split(/\s+/);
   const cmd = args.shift()?.toLowerCase();
+
   const data = loadData();
 
   // ==============================
-  // HELP (manda no privado e apaga comando no canal)
+  // HELP
   if (cmd === "!help") {
     if (canManageMessages(msg)) await safeDelete(msg);
 
     const helpText =
       "**📜 Comandos do Camatron**\n\n" +
-      "`!daily` → ganha 5 tokens\n" +
+      "`!daily` → ganha 5 tokens (vira no 00:00)\n" +
       "`!tokens` → vê teus tokens\n" +
-      "`!cassino X` → aposta X tokens (mínimo 5)\n" +
       "`!punir @user <tempo>` → inicia votação\n" +
       "`!punir @user <tempo> anon` → votação anônima (custo dobrado)\n\n" +
-      "**Tempos:** 1, 5, 10, 60, 1440, 10080\n\n" +
+      "**Tempos:** 1, 5, 10, 60, 1440, 10080\n" +
+      "**Votação:** 1min→45s | <60min→2m30 | >=60min→5m\n\n" +
       "**ADM Camatron:**\n" +
       "`!addtokens @user X`\n" +
       "`!removetokens @user X`\n" +
-      "`!checktokens @user'\n" +
+      "`!checktokens @user`\n" +
       "`!resetdaily @user`";
-
 
     try {
       await msg.author.send(helpText);
@@ -131,34 +143,27 @@ client.on("messageCreate", async (msg) => {
   }
 
   // ==============================
-// DAILY (reseta na virada do dia)
-if (cmd === "!daily") {
-  if (canManageMessages(msg)) await safeDelete(msg);
+  // DAILY (vira no 00:00 São Paulo)
+  if (cmd === "!daily") {
+    if (canManageMessages(msg)) await safeDelete(msg);
 
-  const now = new Date();
-  const today = now.toISOString().slice(0, 10); // YYYY-MM-DD
+    const today = todayKeySaoPaulo();
+    const lastDay = data.lastDaily[msg.author.id];
 
-  const lastDay = data.lastDaily[msg.author.id];
+    if (lastDay === today) {
+      await sendAndAutoDelete(msg.channel, `⏳ ${msg.author}, tu já pegou os tokens hoje.`);
+      return;
+    }
 
-  if (lastDay === today) {
-    await sendAndAutoDelete(
-      msg.channel,
-      `⏳ ${msg.author}, tu já pegou os tokens hoje.`
-    );
+    const user = getUser(data, msg.author.id);
+    user.tokens += 5;
+
+    data.lastDaily[msg.author.id] = today;
+    saveData(data);
+
+    await sendAndAutoDelete(msg.channel, `🎉 ${msg.author}, +5 tokens!`);
     return;
   }
-
-  const user = getUser(data, msg.author.id);
-  user.tokens += 5;
-  data.lastDaily[msg.author.id] = today;
-  saveData(data);
-
-  await sendAndAutoDelete(
-    msg.channel,
-    `🎉 ${msg.author}, +5 tokens!`
-  );
-  return;
-}
 
   // ==============================
   // TOKENS (próprio)
@@ -176,7 +181,7 @@ if (cmd === "!daily") {
     if (canManageMessages(msg)) await safeDelete(msg);
 
     if (!hasAdminRole(msg.member)) {
-      await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, só quem tem o cargo **ADM Camatron**.`);
+      await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, só quem tem o cargo **${ADMIN_ROLE_NAME}**.`);
       return;
     }
 
@@ -190,32 +195,29 @@ if (cmd === "!daily") {
     await sendAndAutoDelete(msg.channel, `💰 <@${targetId}> tem **${u.tokens} tokens**.`);
     return;
   }
-  
-// ==============================
-// RESET DAILY (ADM)
-if (cmd === "!resetdaily") {
-  if (canManageMessages(msg)) await safeDelete(msg);
 
-  if (!hasAdminRole(msg.member)) {
-    await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, só quem tem o cargo **ADM Camatron**.`);
+  // ==============================
+  // RESETDAILY (ADM)
+  if (cmd === "!resetdaily") {
+    if (canManageMessages(msg)) await safeDelete(msg);
+
+    if (!hasAdminRole(msg.member)) {
+      await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, só quem tem o cargo **${ADMIN_ROLE_NAME}**.`);
+      return;
+    }
+
+    const targetId = args[0]?.replace(/[<@!>]/g, "");
+    if (!targetId) {
+      await sendAndAutoDelete(msg.channel, "Uso: `!resetdaily @user`");
+      return;
+    }
+
+    delete data.lastDaily[targetId];
+    saveData(data);
+
+    await sendAndAutoDelete(msg.channel, `🔄 Daily de <@${targetId}> resetado.`);
     return;
   }
-
-  const targetId = args[0]?.replace(/[<@!>]/g, "");
-  if (!targetId) {
-    await sendAndAutoDelete(msg.channel, "Uso: `!resetdaily @user`");
-    return;
-  }
-
-  delete data.lastDaily[targetId];
-  saveData(data);
-
-  await sendAndAutoDelete(
-    msg.channel,
-    `🔄 Daily de <@${targetId}> resetado.`
-  );
-  return;
-}
 
   // ==============================
   // ADD / REMOVE TOKENS (ADM)
@@ -223,7 +225,7 @@ if (cmd === "!resetdaily") {
     if (canManageMessages(msg)) await safeDelete(msg);
 
     if (!hasAdminRole(msg.member)) {
-      await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, só quem tem o cargo **ADM Camatron**.`);
+      await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, só quem tem o cargo **${ADMIN_ROLE_NAME}**.`);
       return;
     }
 
@@ -244,134 +246,115 @@ if (cmd === "!resetdaily") {
     return;
   }
 
-// ==============================
-// PUNIR (votação) — não reduz timeout + duração variável
-if (cmd === "!punir") {
-  if (canManageMessages(msg)) await safeDelete(msg);
+  // ==============================
+  // PUNIR (votação) — duração variável + não reduz timeout + reembolso
+  if (cmd === "!punir") {
+    if (canManageMessages(msg)) await safeDelete(msg);
 
-  const targetId = args[0]?.replace(/[<@!>]/g, "");
-  const minutesKey = args[1];                 // mantém como string
-  const anon = args[2] === "anon";
+    const targetId = args[0]?.replace(/[<@!>]/g, "");
+    const minutesKey = args[1];
+    const anon = args[2] === "anon";
 
-  if (!targetId || !punishments[minutesKey]) {
-    await sendAndAutoDelete(msg.channel, "Uso: `!punir @user 5` ou `!punir @user 5 anon`");
-    return;
-  }
-
-  const minutes = punishments[minutesKey];    // número (1/5/10/60/1440/10080)
-  const cost = minutes * (anon ? 2 : 1);
-
-  const opener = getUser(data, msg.author.id);
-  if (opener.tokens < cost) {
-    await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, tokens insuficientes.`);
-    return;
-  }
-
- let voteMs;
-let voteLabel;
-
-if (minutes === 1) {
-  voteMs = 45 * 1000;          // 45 segundos
-  voteLabel = "45s";
-} else if (minutes < 60) {
-  voteMs = 2.5 * 60 * 1000;    // 2m30
-  voteLabel = "2m30";
-} else {
-  voteMs = 5 * 60 * 1000;      // 5 minutos
-  voteLabel = "5 min";
-}
-
-  // cobra tokens
-  opener.tokens -= cost;
-  saveData(data);
-
-  const poll = await msg.channel.send(
-    `⚖ **Votação de castigo (${voteLabel})**\n` +
-    `Alvo: <@${targetId}>\n` +
-    `Tempo: ${minutes} min\n` +
-    `${anon ? "🔒 Anônima" : `Autor: ${msg.author}`}\n` +
-    `👍 SIM | 👎 NÃO\n` +
-    `🗳 Mínimo: ${MIN_VOTES} votos`
-  );
-
-  await poll.react("👍");
-  await poll.react("👎");
-
-  setTimeout(async () => {
-    const fetched = await poll.fetch();
-    const yes = (fetched.reactions.cache.get("👍")?.count || 1) - 1;
-    const no  = (fetched.reactions.cache.get("👎")?.count || 1) - 1;
-    const total = yes + no;
-
-    // menos votos que o mínimo => reembolsa
-    if (total < MIN_VOTES) {
-      const d2 = loadData();
-      getUser(d2, msg.author.id).tokens += cost;
-      saveData(d2);
-
-      await sendAndAutoDelete(
-        msg.channel,
-        `❌ Votação inválida (<${MIN_VOTES} votos). Tokens devolvidos para ${msg.author}.`
-      );
-      setTimeout(() => safeDelete(fetched), CLEANUP_DELAY_MS);
+    if (!targetId || !punishments[minutesKey]) {
+      await sendAndAutoDelete(msg.channel, "Uso: `!punir @user 5` ou `!punir @user 5 anon`");
       return;
     }
 
-    // votação aprovada
-    if (yes > no) {
-      try {
-        const member = await msg.guild.members.fetch(targetId);
+    const minutes = punishments[minutesKey];
+    const cost = minutes * (anon ? 2 : 1);
 
-        // ⛔ regra anti-redução:
-        // se já existe timeout maior/igual ao novo, NÃO aplica e devolve tokens
-        const curUntil = member.communicationDisabledUntil;
-        const curMs = curUntil ? (curUntil.getTime() - Date.now()) : 0;
-        const newMs = minutes * 60 * 1000;
-
-        // margem pra não dar "reduz" por diferença de segundos
-        const MARGIN_MS = 10 * 1000;
-
-        if (curMs >= (newMs - MARGIN_MS)) {
-          const d2 = loadData();
-          getUser(d2, msg.author.id).tokens += cost;
-          saveData(d2);
-
-          await sendAndAutoDelete(
-            msg.channel,
-            `⚠️ <@${targetId}> já está com castigo **maior ou igual**. Não reduzi o timeout e devolvi **${cost} tokens** para ${msg.author}.`
-          );
-          setTimeout(() => safeDelete(fetched), CLEANUP_DELAY_MS);
-          return;
-        }
-
-        // aplica o novo (só se for maior)
-        await member.timeout(newMs);
-
-        await sendAndAutoDelete(
-          msg.channel,
-          `✅ Aprovado. <@${targetId}> levou ${minutes} min de castigo.`
-        );
-      } catch (e) {
-        await sendAndAutoDelete(msg.channel, "❌ Não consegui aplicar o timeout (permissões/hierarquia).");
-      }
-    } else {
-      await sendAndAutoDelete(msg.channel, `❌ Rejeitado. <@${targetId}> não levou castigo.`);
+    const opener = getUser(data, msg.author.id);
+    if (opener.tokens < cost) {
+      await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, tokens insuficientes.`);
+      return;
     }
 
-    setTimeout(() => safeDelete(fetched), CLEANUP_DELAY_MS);
-  }, voteMs);
+    // duração da votação
+    let voteMs, voteLabel;
+    if (minutes === 1) {
+      voteMs = 45 * 1000;
+      voteLabel = "45s";
+    } else if (minutes < 60) {
+      voteMs = 150 * 1000; // 2m30
+      voteLabel = "2m30";
+    } else {
+      voteMs = 5 * 60 * 1000;
+      voteLabel = "5 min";
+    }
 
-  return;
-}
+    // cobra tokens
+    opener.tokens -= cost;
+    saveData(data);
 
+    const poll = await msg.channel.send(
+      `⚖ **Votação de castigo (${voteLabel})**\n` +
+      `Alvo: <@${targetId}>\n` +
+      `Tempo: ${minutes} min\n` +
+      `${anon ? "🔒 Anônima" : `Autor: ${msg.author}`}\n` +
+      `👍 SIM | 👎 NÃO\n` +
+      `🗳 Mínimo: ${MIN_VOTES} votos`
+    );
+
+    await poll.react("👍");
+    await poll.react("👎");
+
+    setTimeout(async () => {
+      const fetched = await poll.fetch();
+      const yes = (fetched.reactions.cache.get("👍")?.count || 1) - 1;
+      const no  = (fetched.reactions.cache.get("👎")?.count || 1) - 1;
+      const total = yes + no;
+
+      // sem votos => reembolsa
+      if (total < MIN_VOTES) {
+        const d2 = loadData();
+        getUser(d2, msg.author.id).tokens += cost;
+        saveData(d2);
+
+        await sendAndAutoDelete(msg.channel, `❌ Votação inválida (<${MIN_VOTES} votos). Tokens devolvidos para ${msg.author}.`);
+        setTimeout(() => safeDelete(fetched), CLEANUP_DELAY_MS);
+        return;
+      }
+
+      // aprovado
+      if (yes > no) {
+        try {
+          const member = await msg.guild.members.fetch(targetId);
+
+          const curUntil = member.communicationDisabledUntil;
+          const curMs = curUntil ? (curUntil.getTime() - Date.now()) : 0;
+
+          const newMs = minutes * 60 * 1000;
+          const MARGIN_MS = 10 * 1000;
+
+          // se já tá com castigo maior/igual => não reduz e devolve tokens
+          if (curMs >= (newMs - MARGIN_MS)) {
+            const d2 = loadData();
+            getUser(d2, msg.author.id).tokens += cost;
+            saveData(d2);
+
+            await sendAndAutoDelete(
+              msg.channel,
+              `⚠️ <@${targetId}> já está com castigo **maior ou igual**. Não reduzi o timeout e devolvi **${cost} tokens** para ${msg.author}.`
+            );
+            setTimeout(() => safeDelete(fetched), CLEANUP_DELAY_MS);
+            return;
+          }
+
+          await member.timeout(newMs);
+          await sendAndAutoDelete(msg.channel, `✅ Aprovado. <@${targetId}> levou ${minutes} min de castigo.`);
+        } catch (e) {
+          await sendAndAutoDelete(msg.channel, "❌ Não consegui aplicar o timeout (permissões/hierarquia).");
+        }
+      } else {
+        await sendAndAutoDelete(msg.channel, `❌ Rejeitado. <@${targetId}> não levou castigo.`);
+      }
+
+      setTimeout(() => safeDelete(fetched), CLEANUP_DELAY_MS);
+    }, voteMs);
+
+    return;
+  }
+});
+
+// ✅ login fora do messageCreate
 client.login(TOKEN);
-
-
-
-
-
-
-
-
-
-
