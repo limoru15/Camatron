@@ -244,79 +244,128 @@ if (cmd === "!resetdaily") {
     return;
   }
 
-  // ==============================
-  // PUNIR (votação)
-  if (cmd === "!punir") {
-    if (canManageMessages(msg)) await safeDelete(msg);
+// ==============================
+// PUNIR (votação) — não reduz timeout + duração variável
+if (cmd === "!punir") {
+  if (canManageMessages(msg)) await safeDelete(msg);
 
-    const targetId = args[0]?.replace(/[<@!>]/g, "");
-    const minutes = args[1];
-    const anon = args[2] === "anon";
+  const targetId = args[0]?.replace(/[<@!>]/g, "");
+  const minutesKey = args[1];                 // mantém como string
+  const anon = args[2] === "anon";
 
-    if (!targetId || !punishments[minutes]) {
-      await sendAndAutoDelete(msg.channel, "Uso: `!punir @user 5` ou `!punir @user 5 anon`");
-      return;
-    }
-
-    const cost = punishments[minutes] * (anon ? 2 : 1);
-    const opener = getUser(data, msg.author.id);
-
-    if (opener.tokens < cost) {
-      await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, tokens insuficientes.`);
-      return;
-    }
-
-    opener.tokens -= cost;
-    saveData(data);
-
-    const poll = await msg.channel.send(
-      `⚖ **Votação de castigo (5 min)**\n` +
-      `Alvo: <@${targetId}>\n` +
-      `Tempo: ${minutes} min\n` +
-      `${anon ? "🔒 Anônima" : `Autor: ${msg.author}`}\n` +
-      `👍 SIM | 👎 NÃO\n` +
-      `🗳 Mínimo: ${MIN_VOTES} votos`
-    );
-
-    await poll.react("👍");
-    await poll.react("👎");
-
-    setTimeout(async () => {
-      const fetched = await poll.fetch();
-      const yes = (fetched.reactions.cache.get("👍")?.count || 1) - 1;
-      const no  = (fetched.reactions.cache.get("👎")?.count || 1) - 1;
-      const total = yes + no;
-
-      if (total < MIN_VOTES) {
-        const d2 = loadData();
-        getUser(d2, msg.author.id).tokens += cost;
-        saveData(d2);
-
-        await sendAndAutoDelete(msg.channel, `❌ Votação inválida (<${MIN_VOTES} votos). Tokens devolvidos para ${msg.author}.`);
-        setTimeout(() => safeDelete(fetched), CLEANUP_DELAY_MS);
-        return;
-      }
-
-      if (yes > no) {
-        try {
-          const member = await msg.guild.members.fetch(targetId);
-          await member.timeout(punishments[minutes] * 60 * 1000);
-          await sendAndAutoDelete(msg.channel, `✅ Aprovado. <@${targetId}> levou ${minutes} min de castigo.`);
-        } catch {
-          await sendAndAutoDelete(msg.channel, "❌ Não consegui aplicar o timeout (permissões/hierarquia).");
-        }
-      } else {
-        await sendAndAutoDelete(msg.channel, `❌ Rejeitado. <@${targetId}> não levou castigo.`);
-      }
-
-      setTimeout(() => safeDelete(fetched), CLEANUP_DELAY_MS);
-    }, VOTE_DURATION_MS);
-
+  if (!targetId || !punishments[minutesKey]) {
+    await sendAndAutoDelete(msg.channel, "Uso: `!punir @user 5` ou `!punir @user 5 anon`");
     return;
   }
-});
+
+  const minutes = punishments[minutesKey];    // número (1/5/10/60/1440/10080)
+  const cost = minutes * (anon ? 2 : 1);
+
+  const opener = getUser(data, msg.author.id);
+  if (opener.tokens < cost) {
+    await sendAndAutoDelete(msg.channel, `❌ ${msg.author}, tokens insuficientes.`);
+    return;
+  }
+
+ let voteMs;
+let voteLabel;
+
+if (minutes === 1) {
+  voteMs = 45 * 1000;          // 45 segundos
+  voteLabel = "45s";
+} else if (minutes < 60) {
+  voteMs = 2.5 * 60 * 1000;    // 2m30
+  voteLabel = "2m30";
+} else {
+  voteMs = 5 * 60 * 1000;      // 5 minutos
+  voteLabel = "5 min";
+}
+
+  // cobra tokens
+  opener.tokens -= cost;
+  saveData(data);
+
+  const poll = await msg.channel.send(
+    `⚖ **Votação de castigo (${voteLabel})**\n` +
+    `Alvo: <@${targetId}>\n` +
+    `Tempo: ${minutes} min\n` +
+    `${anon ? "🔒 Anônima" : `Autor: ${msg.author}`}\n` +
+    `👍 SIM | 👎 NÃO\n` +
+    `🗳 Mínimo: ${MIN_VOTES} votos`
+  );
+
+  await poll.react("👍");
+  await poll.react("👎");
+
+  setTimeout(async () => {
+    const fetched = await poll.fetch();
+    const yes = (fetched.reactions.cache.get("👍")?.count || 1) - 1;
+    const no  = (fetched.reactions.cache.get("👎")?.count || 1) - 1;
+    const total = yes + no;
+
+    // menos votos que o mínimo => reembolsa
+    if (total < MIN_VOTES) {
+      const d2 = loadData();
+      getUser(d2, msg.author.id).tokens += cost;
+      saveData(d2);
+
+      await sendAndAutoDelete(
+        msg.channel,
+        `❌ Votação inválida (<${MIN_VOTES} votos). Tokens devolvidos para ${msg.author}.`
+      );
+      setTimeout(() => safeDelete(fetched), CLEANUP_DELAY_MS);
+      return;
+    }
+
+    // votação aprovada
+    if (yes > no) {
+      try {
+        const member = await msg.guild.members.fetch(targetId);
+
+        // ⛔ regra anti-redução:
+        // se já existe timeout maior/igual ao novo, NÃO aplica e devolve tokens
+        const curUntil = member.communicationDisabledUntil;
+        const curMs = curUntil ? (curUntil.getTime() - Date.now()) : 0;
+        const newMs = minutes * 60 * 1000;
+
+        // margem pra não dar "reduz" por diferença de segundos
+        const MARGIN_MS = 10 * 1000;
+
+        if (curMs >= (newMs - MARGIN_MS)) {
+          const d2 = loadData();
+          getUser(d2, msg.author.id).tokens += cost;
+          saveData(d2);
+
+          await sendAndAutoDelete(
+            msg.channel,
+            `⚠️ <@${targetId}> já está com castigo **maior ou igual**. Não reduzi o timeout e devolvi **${cost} tokens** para ${msg.author}.`
+          );
+          setTimeout(() => safeDelete(fetched), CLEANUP_DELAY_MS);
+          return;
+        }
+
+        // aplica o novo (só se for maior)
+        await member.timeout(newMs);
+
+        await sendAndAutoDelete(
+          msg.channel,
+          `✅ Aprovado. <@${targetId}> levou ${minutes} min de castigo.`
+        );
+      } catch (e) {
+        await sendAndAutoDelete(msg.channel, "❌ Não consegui aplicar o timeout (permissões/hierarquia).");
+      }
+    } else {
+      await sendAndAutoDelete(msg.channel, `❌ Rejeitado. <@${targetId}> não levou castigo.`);
+    }
+
+    setTimeout(() => safeDelete(fetched), CLEANUP_DELAY_MS);
+  }, voteMs);
+
+  return;
+}
 
 client.login(TOKEN);
+
 
 
 
